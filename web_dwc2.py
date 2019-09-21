@@ -1471,7 +1471,7 @@ class web_dwc2:
 			'KISSlicer' ,
 			'^Slic3r$' ,
 			'Simplify3D\(R\).*' ,
-			'Slic3r Prusa Edition\s.*\so',
+			'(Slic3r Prusa Edition|PrusaSlicer)\s.*?\s',
 			'Cura_SteamEngine.*' ,
 			'ideaMaker\s([0-9]*\..*,)'
 			]
