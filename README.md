@@ -12,7 +12,8 @@ This module also super-seeds the `virtual_sdcard` and `pause_resume` modules. **
 git clone https://github.com/knoopx/klippy-web-control ~/klippy-web-control
 ln -s ~/klippy-web-control/kwc.py ~/klipper/klippy/extras
 mkdir -p ~/sdcard/www ~/sdcard/sys ~/sdcard/gcodes
-cd ~/sdcard/www && curl -L https://github.com/knoopx/KlipperWebControl/releases/latest/download/KlipperWebControl.zip | busybox unzip -o -
+cd ~/sdcard/www && wget https://github.com/knoopx/KlipperWebControl/releases/latest/download/KlipperWebControl.zip && unzip KlipperWebControl.zip && rm KlipperWebControl.zip
+~/klippy-env/bin/pip install tornado
 ```
 
 ## Usage
@@ -22,8 +23,7 @@ Add a new section to your `printer.cfg`:
 ```
 [kwc]
 path: ~/sdcard
-port: 8080
-address: 127.0.0.1
+port: 4444
 abort_gcode:
   G91; relative
   {% if printer.extruder0.temperature >= 170 %}

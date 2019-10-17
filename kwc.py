@@ -1071,7 +1071,7 @@ class KlipperWebControl:
 	def __init__(self, config):
 		self.config = config
 		self.address = config.get('address', "127.0.0.1")
-		self.port = config.getint("port", 8080)
+		self.port = config.getint("port", 4444)
 
 		self.thread = None
 		self.ioloop = None
