@@ -447,6 +447,11 @@ class Job:
 
 		self.gcode.register_command('PRINT_FILE', self.cmd_PRINT_FILE)
 		self.gcode.register_command('SELECT_FILE', self.cmd_SELECT_FILE)
+
+		# de-register any previously registered PAUSE/RESUME commands by pause_resume module
+		self.gcode.register_command("PAUSE", None)
+		self.gcode.register_command("RESUME", None)
+
 		self.gcode.register_command("PAUSE", self.cmd_PAUSE)
 		self.gcode.register_command("RESUME", self.cmd_RESUME)
 		self.gcode.register_command("ABORT", self.cmd_ABORT)
@@ -999,6 +1004,9 @@ class Manager:
 
 		if config.get('abort_gcode', None) is not None:
 			self.abort_gcode = self.gcode_macro.load_template(config, 'abort_gcode')
+
+		# filament_switch_sensor depends on pause_resume, we load it first and re-attach to our own implementation
+		self.printer.try_load_module(config, 'pause_resume')
 
 		self.sd_card = SDCard(self)
 
