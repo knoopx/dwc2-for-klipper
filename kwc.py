@@ -870,10 +870,10 @@ class HeatState:
 		return self.heat.heaters.values().index(heater)
 
 	def get_heater_state(self, status):
-		manager = 0
+		state = 0
 		if status['target'] > 0:
-			manager = 1
-		return manager
+			state = 1
+		return state
 
 
 class SensorState:
