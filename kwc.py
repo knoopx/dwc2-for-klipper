@@ -739,7 +739,7 @@ class MoveState:
 		self.toolhead = self.printer.lookup_object('toolhead')
 		self.kinematics = self.toolhead.get_kinematics()
 		self.extruders = kinematics.extruder.get_printer_extruders(self.printer)
-		self.bed_mesh = self.printer.lookup_object("bed_mesh")
+		self.bed_mesh = self.printer.lookup_object("bed_mesh", None)
 
 		self.top_speed = 0
 
@@ -823,7 +823,7 @@ class HeatState:
 		self.heat = self.printer.lookup_object('heater')
 		self.heaters = self.heat.heaters.items()
 		self.heat_beds = self.printer.lookup_objects('heater_bed')
-		self.probe_temp = self.printer.lookup_object('probe_temp')
+		self.probe_temp = self.printer.lookup_object('probe_temp', None)
 
 	def get_state(self, eventtime):
 		heater_statuses = [heater.get_status(eventtime) for name, heater in self.heaters]
@@ -876,7 +876,7 @@ class SensorState:
 		printer = manager.printer
 		query_endstops = printer.try_load_module(manager.config, 'query_endstops')
 		self.endstops = query_endstops.endstops
-		self.probe = printer.lookup_object('probe')
+		self.probe = printer.lookup_object('probe', None)
 
 	def get_state(self, eventtime):
 		probes = []
