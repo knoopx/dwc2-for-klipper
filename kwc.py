@@ -1040,6 +1040,7 @@ class Manager:
 		return eventtime + .25
 
 	def handle_gcode_response(self, msg):
+		if re.match('(B|T\d):\d+.\d\s/\d+.\d+', msg): return
 		self.gcode_responses.append(msg)
 
 	def dispatch_gcode(self, gcode):
@@ -1054,8 +1055,14 @@ class Manager:
 				self.gcode_responses = previous_responses
 		return responses
 
+	def get_messages(self):
+		messages = copy.copy(self.gcode_responses)
+		del self.gcode_responses[:]
+		return messages
+
 	def get_state(self, eventtime):
 		return ({
+			"messages": self.get_messages(),
 			"state": self.state.get_state(eventtime),
 			"tools": self.tools.get_state(eventtime),
 			"fans": self.fans.get_state(eventtime),
