@@ -993,6 +993,7 @@ class Manager:
 
 		self.printer = config.get_printer()
 		self.printer.register_event_handler("klippy:ready", self.handle_ready)
+		self.printer.register_event_handler("klippy:disconnect", self.handle_disconnect)
 
 		self.printer_name = config.get('printer_name', "Klipper")
 
@@ -1029,6 +1030,9 @@ class Manager:
 		self.fans = FanState(self)
 		self.sensors = SensorState(self)
 		self.reactor.update_timer(self.timer, self.reactor.NOW)
+
+	def handle_disconnect(self):
+		self.reactor.unregister_timer(self.timer)
 
 	def handle_timer(self, eventtime):
 		if len(WebSocketHandler.clients) > 0:
@@ -1074,48 +1078,37 @@ class Manager:
 class KlipperWebControl:
 	def __init__(self, config):
 		self.config = config
-		self.address = config.get('address', "127.0.0.1")
-		self.port = config.getint("port", 4444)
 
-		self.thread = None
-		self.ioloop = None
-		self.manager = Manager(self.config)
-
-		printer = config.get_printer()
-		printer.register_event_handler("klippy:ready", self.handle_ready)
-		printer.register_event_handler("klippy:disconnect", self.handle_disconnect)
-
-	def handle_disconnect(self):
-		tornado.ioloop.IOLoop.current().stop()
-		self.http_server.stop()
-
-	def handle_ready(self):
-		def spawn(address, port, app):
-			logging.info("KWC starting at http://%s:%s", address, port)
-			self.http_server = tornado.httpserver.HTTPServer(app, max_buffer_size=500 * 1024 * 1024)
-			self.http_server.listen(self.port)
-			tornado.ioloop.IOLoop.current().start()
+		address = config.get('address', "127.0.0.1")
+		port = config.getint("port", 4444)
+		manager = Manager(self.config)
 
 		app = tornado.web.Application([
 			# legacy endpoints just third party integration
-			("/rr_connect", DummyHandler, {"manager": self.manager}),
-			("/rr_disconnect", DummyHandler, {"manager": self.manager}),
-			("/rr_upload", RRUploadHandler, {"manager": self.manager}),
-			("/rr_gcode", RRGCodeHandler, {"manager": self.manager}),
+			("/rr_connect", DummyHandler, {"manager": manager}),
+			("/rr_disconnect", DummyHandler, {"manager": manager}),
+			("/rr_upload", RRUploadHandler, {"manager": manager}),
+			("/rr_gcode", RRGCodeHandler, {"manager": manager}),
 
-			("/machine/bed_mesh/height_map", MachineBedMeshHeightMapHandler, {"manager": self.manager}),
-			("/machine/file/move", MachineMoveHandler, {"manager": self.manager}),
-			(r"/machine/file/(.*)", MachineFileHandler, {"manager": self.manager}),
-			(r"/machine/fileinfo/(.*)", MachineFileInfoHandler, {"manager": self.manager}),
-			(r"/machine/directory/(.*)", MachineDirectoryHandler, {"manager": self.manager}),
-			("/machine/code", MachineCodeHandler, {"manager": self.manager}),
-			("/machine", WebSocketHandler, {"manager": self.manager}),
-			(r"/.*", WebRootRequestHandler, {"manager": self.manager}),
+			("/machine/bed_mesh/height_map", MachineBedMeshHeightMapHandler, {"manager": manager}),
+			("/machine/file/move", MachineMoveHandler, {"manager": manager}),
+			(r"/machine/file/(.*)", MachineFileHandler, {"manager": manager}),
+			(r"/machine/fileinfo/(.*)", MachineFileInfoHandler, {"manager": manager}),
+			(r"/machine/directory/(.*)", MachineDirectoryHandler, {"manager": manager}),
+			("/machine/code", MachineCodeHandler, {"manager": manager}),
+			("/machine", WebSocketHandler, {"manager": manager}),
+			(r"/.*", WebRootRequestHandler, {"manager": manager}),
 		], cookie_secret=base64.b64encode(uuid.uuid4().bytes + uuid.uuid4().bytes))
 
-		self.thread = threading.Thread(target=spawn, args=(self.address, self.port, app))
-		self.thread.daemon = True
-		self.thread.start()
+		thread = threading.Thread(target=self.spawn, args=(address, port, app))
+		thread.daemon = True
+		thread.start()
+
+	def spawn(self, address, port, app):
+		logging.info("KWC starting at http://%s:%s", address, port)
+		http_server = tornado.httpserver.HTTPServer(app, max_buffer_size=500 * 1024 * 1024)
+		http_server.listen(port)
+		tornado.ioloop.IOLoop.current().start()
 
 
 def load_config(config):
