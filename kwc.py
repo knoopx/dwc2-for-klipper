@@ -713,9 +713,11 @@ class ToolState:
 		tools = []
 		for extruder in self.extruders:
 			ex_heater_index = self.manager.heat.get_heater_index(extruder.heater)
+			heater_status  = extruder.heater.get_status(eventtime)
+
 			tools.append({
 				"number": self.extruders.index(extruder),
-				"active": [0],
+				"active": [heater_status['target']],
 				# "name": extruder.get_name(),
 				"filamentExtruder": 0,
 				# "filament": null,
