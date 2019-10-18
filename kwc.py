@@ -414,7 +414,10 @@ class WebSocketHandler(tornado.websocket.WebSocketHandler):
 			WebSocketHandler.clients.add(self)
 
 	def on_close(self):
-		WebSocketHandler.clients.remove(self)
+		try:
+			WebSocketHandler.clients.remove(self)
+		except:
+			pass
 
 	@classmethod
 	def broadcast(cls, payload):
