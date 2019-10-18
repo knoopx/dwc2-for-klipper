@@ -313,55 +313,37 @@ class MachineFileHandler(RestHandler):
 
 		real_path = self.manager.sd_card.resolve_path(path)
 
-		bed_mesh = self.manager.printer.lookup_object("bed_mesh")
-
-		if bed_mesh and path == '0:/sys/heightmap.csv':
-			force_download(self.get_height_map_csv(bed_mesh), "heightmap.csv")
-		elif os.path.isfile(real_path):
+		if os.path.isfile(real_path):
 			with open(real_path, "rb") as f:
 				force_download(f.read(), os.path.basename(real_path))
 		else:
 			raise tornado.web.HTTPError(404, "File does not exist")
 
-	def get_height_map_csv(self, bed_mesh):
-		def calc_mean(matrix_):
-			matrix_tolist = []
-			for line in matrix_:
-				matrix_tolist += line
-			return float(sum(matrix_tolist)) / len(matrix_tolist)
 
-		def calc_stdv(matrix_):
-			from math import sqrt
-			matrix_tolist = []
-			for line in matrix_:
-				matrix_tolist += line
+class MachineBedMeshHeightMapHandler(RestHandler):
+	def get(self):
+		bed_mesh = self.manager.printer.lookup_object("bed_mesh")
+		if bed_mesh and bed_mesh.z_mesh and bed_mesh.z_mesh.mesh_z_table:
+			self.finish(self.get_height_map(bed_mesh))
+		else:
+			raise tornado.web.HTTPError(404, "No height map available")
 
-			mean = float(sum(matrix_tolist)) / len(matrix_tolist)
-			return sqrt(float(reduce(lambda x, y: x + y, map(lambda x: (x - mean) ** 2, matrix_tolist))) / len(
-				matrix_tolist))  # Stackoverflow - liked that native short solution
+	def get_height_map(self, bed_mesh):
+		z_mesh = bed_mesh.z_mesh
 
-		hmap = []
-		z_matrix = bed_mesh.z_mesh.mesh_z_table
-		mesh_data = bed_mesh.z_mesh
+		mesh = []
+		for y in range(z_mesh.mesh_y_count - 1, -1, -1):
+			for x, z in enumerate(z_mesh.mesh_z_table[y]):
+				mesh.append(
+					[z_mesh.mesh_x_min + x * z_mesh.mesh_x_dist, z_mesh.mesh_y_min + (y - 1) * z_mesh.mesh_y_dist, (z)])
 
-		meane_ = round(calc_mean(z_matrix), 3)
-		stdev_ = round(calc_stdv(z_matrix), 3)
 
-		hmap.append('RepRapFirmware height map file v2 generated at ' + str(
-			datetime.now().strftime('%Y-%m-%d %H:%M')) + ', mean error ' + str(meane_) + ', deviation ' + str(
-			stdev_))
-		hmap.append('xmin,xmax,ymin,ymax,radius,xspacing,yspacing,xnum,ynum')
+		probed = []
+		for y, line in enumerate(bed_mesh.calibrate.probed_z_table):
+			for x, z in enumerate(line):
+				probed.append([z_mesh.mesh_x_min + x * z_mesh.mesh_x_dist, z_mesh.mesh_y_min + (y - 1) * z_mesh.mesh_y_dist, z ])
 
-		hmap.append(str(mesh_data.mesh_x_min) + ',' + str(mesh_data.mesh_x_max) + ',' + str(
-			mesh_data.mesh_y_min) + ',' + str(mesh_data.mesh_y_max) + ',-1.00,' +
-		            str(mesh_data.mesh_x_dist) + ',' + str(mesh_data.mesh_y_dist) +
-		            ',' + str(mesh_data.mesh_x_count) + ',' + str(mesh_data.mesh_y_count))
-
-		for line in z_matrix:
-			red_by_offset = map(lambda x: x - meane_, line)
-			hmap.append('  ' + ',  '.join(map(str, red_by_offset)))
-
-		return "\n".join(hmap)
+		return dict(mesh=mesh, probed=probed)
 
 
 class MachineFileInfoHandler(RestHandler):
@@ -1118,6 +1100,7 @@ class KlipperWebControl:
 			("/rr_upload", RRUploadHandler, {"manager": self.manager}),
 			("/rr_gcode", RRGCodeHandler, {"manager": self.manager}),
 
+			("/machine/bed_mesh/height_map", MachineBedMeshHeightMapHandler, {"manager": self.manager}),
 			("/machine/file/move", MachineMoveHandler, {"manager": self.manager}),
 			(r"/machine/file/(.*)", MachineFileHandler, {"manager": self.manager}),
 			(r"/machine/fileinfo/(.*)", MachineFileInfoHandler, {"manager": self.manager}),
