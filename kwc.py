@@ -890,7 +890,7 @@ class SensorState:
 				# "threshold": 500,
 				# "speed": 2,
 				# "diveHeight": 5,
-				"offsets": [self.probe.z_offset],
+				"offsets": self.probe.get_offsets(),
 				# "triggerHeight": 0.7,
 				# "filtered": true,
 				# "inverted": false,
