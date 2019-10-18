@@ -1023,6 +1023,7 @@ class Manager:
 		self.gcode_responses = []
 
 	def handle_ready(self):
+		logging.info("Starting state notification timer")
 		self.state = State(self)
 		self.tools = ToolState(self)
 		self.move = MoveState(self)
@@ -1032,6 +1033,7 @@ class Manager:
 		self.reactor.update_timer(self.timer, self.reactor.NOW)
 
 	def handle_disconnect(self):
+		logging.info("Stopping state notification timer")
 		self.reactor.unregister_timer(self.timer)
 
 	def handle_timer(self, eventtime):
