@@ -341,7 +341,7 @@ class MachineFileHandler(RestHandler):
 				matrix_tolist))  # Stackoverflow - liked that native short solution
 
 		hmap = []
-		z_matrix = bed_mesh.calibrate.probed_z_table
+		z_matrix = bed_mesh.z_mesh.mesh_z_table
 		mesh_data = bed_mesh.z_mesh
 
 		meane_ = round(calc_mean(z_matrix), 3)
@@ -351,12 +351,11 @@ class MachineFileHandler(RestHandler):
 			datetime.now().strftime('%Y-%m-%d %H:%M')) + ', mean error ' + str(meane_) + ', deviation ' + str(
 			stdev_))
 		hmap.append('xmin,xmax,ymin,ymax,radius,xspacing,yspacing,xnum,ynum')
-		xspace_ = (mesh_data.mesh_x_max - mesh_data.mesh_x_min) / mesh_data.mesh_x_count
-		yspace_ = (mesh_data.mesh_y_max - mesh_data.mesh_y_min) / mesh_data.mesh_y_count
+
 		hmap.append(str(mesh_data.mesh_x_min) + ',' + str(mesh_data.mesh_x_max) + ',' + str(
-			mesh_data.mesh_y_min) + ',' + str(mesh_data.mesh_y_max) + \
-		            ',-1.00,' + str(xspace_) + ',' + str(yspace_) + ',' + str(mesh_data.mesh_x_count) + ',' + str(
-			mesh_data.mesh_y_count))
+			mesh_data.mesh_y_min) + ',' + str(mesh_data.mesh_y_max) + ',-1.00,' +
+		            str(mesh_data.mesh_x_dist) + ',' + str(mesh_data.mesh_y_dist) +
+		            ',' + str(mesh_data.mesh_x_count) + ',' + str(mesh_data.mesh_y_count))
 
 		for line in z_matrix:
 			red_by_offset = map(lambda x: x - meane_, line)
