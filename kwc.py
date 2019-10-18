@@ -16,7 +16,7 @@ import kinematics.extruder
 import jinja2
 from extras.gcode_macro import TemplateWrapper
 import json
-
+import io, traceback
 from gcode import GCodeParser
 
 # monkey-patch GCodeParser to emit respond events (so we can capture)
@@ -242,6 +242,13 @@ class RestHandler(RequestHandler):
 		self.set_status(204)
 		self.finish()
 
+	def write_error(self, status_code, exc_info):
+		out = io.BytesIO()
+		traceback.print_exception(exc_info[0], exc_info[1], exc_info[2], None, out)
+		formatted = out.getvalue()
+		out.close()
+		self.set_header("Content-Type", "text/plain")
+		self.finish(formatted)
 
 class MachineMoveHandler(RestHandler):
 	def post(self):
