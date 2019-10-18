@@ -285,6 +285,9 @@ class MachineDirectoryHandler(RestHandler):
 class MachineFileHandler(RestHandler):
 	def put(self, path):
 		real_path = self.manager.sd_card.resolve_path(path)
+		dirname = os.path.dirname(real_path)
+		if not os.path.exists(dirname):
+			os.makedirs(dirname)
 		with open(real_path, 'w') as file:
 			file.write(self.request.body)
 
