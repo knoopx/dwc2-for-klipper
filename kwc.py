@@ -18,6 +18,7 @@ from extras.gcode_macro import TemplateWrapper
 import json
 import io, traceback
 from gcode import GCodeParser
+from multiprocessing import Queue, JoinableQueue
 
 # monkey-patch GCodeParser to emit respond events (so we can capture)
 
@@ -354,15 +355,10 @@ class MachineFileInfoHandler(RestHandler):
 
 
 class MachineCodeHandler(RestHandler):
-	@tornado.web.asynchronous
 	def post(self):
-		def handler(e):
-			responses = self.manager.dispatch_gcode(self.request.body)
-			self.set_header("Content-Type", "text/plain")
-			self.finish("\n".join(responses))
-
-		reactor = self.manager.printer.get_reactor()
-		reactor.register_async_callback(handler)
+		responses = self.manager.dispatch(self.manager.process_gcode, self.request.body)
+		self.set_header("Content-Type", "text/plain")
+		self.finish("\n".join(responses))
 
 class DummyHandler(RestHandler):
 	def get(self):
@@ -375,14 +371,9 @@ class RRGCodeHandler(RestHandler):
 	def get(self):
 		# just replace M32 with PRINT_FILE, this endpoint is mostly used for that
 		gcode = re.sub(r'M32\s+(\"[^"]+\")', r'PRINT_FILE FILE=\1', self.get_argument("gcode"))
-
-		def handler(e):
-			responses = self.manager.dispatch_gcode(gcode)
-			self.set_header("Content-Type", "text/plain")
-			self.finish("\n".join(responses))
-
-		reactor = self.manager.printer.get_reactor()
-		reactor.register_async_callback(handler)
+		responses = self.manager.dispatch(self.manager.process_gcode, gcode)
+		self.set_header("Content-Type", "text/plain")
+		self.finish("\n".join(responses))
 
 class RRUploadHandler(RestHandler):
 	def post(self):
@@ -545,7 +536,7 @@ class Job:
 		if did_abort:
 			template = self.sd_card.manager.abort_gcode
 			if template:
-				self.gcode.run_script(template.render())
+				self.gcode.run_script_from_command(template.render())
 
 	def work_handler(self, eventtime):
 		logging.info("Job started at position %d", self.file_position)
@@ -560,7 +551,6 @@ class Job:
 			self.work_timer = None
 			return self.reactor.NEVER
 
-		gcode_mutex = self.gcode.get_mutex()
 		partial_input = ""
 		lines = []
 		while not (self.did_pause or self.did_abort):
@@ -584,7 +574,8 @@ class Job:
 				continue
 
 			# Pause if any other request is pending in the gcode class
-			if gcode_mutex.test():
+			if self.gcode.get_mutex().test():
+				logging.info("job paused, waiting for gcode mutex")
 				self.reactor.pause(self.reactor.monotonic() + 0.100)
 				continue
 
@@ -1024,6 +1015,13 @@ class Manager:
 
 		self.gcode_responses = []
 
+		# blocks concurrent execution of multiple web gcode invocations
+		self.process_mutex = self.reactor.mutex()
+
+		self.broadcast_queue = Queue()
+		self.broadcast_loop = threading.Thread(target=self.broadcast_loop)
+		self.broadcast_loop.start()
+
 	def handle_ready(self):
 		logging.info("Starting state notification timer")
 		self.state = State(self)
@@ -1039,24 +1037,48 @@ class Manager:
 		self.reactor.unregister_timer(self.timer)
 
 	def handle_timer(self, eventtime):
-		if len(WebSocketHandler.clients) > 0:
-			WebSocketHandler.broadcast(self.get_state(eventtime))
+		self.broadcast_queue.put_nowait(self.get_state(eventtime))
 		return eventtime + .25
+
+	def broadcast_loop(self):
+		while 1:
+			state = self.broadcast_queue.get(True)
+			if len(WebSocketHandler.clients) > 0:
+				WebSocketHandler.broadcast(state)
 
 	def handle_gcode_response(self, msg):
 		if re.match('(B|T\d):\d+.\d\s/\d+.\d+', msg): return
 		self.gcode_responses.append(msg)
 
-	def dispatch_gcode(self, gcode):
+	# used to run commands within the reactor from different threads
+	def dispatch(self, target, *args):
+		q = JoinableQueue()
+
+		def callback(e):
+			q.put(target(*args))
+			q.task_done()
+
+		reactor = self.printer.get_reactor()
+		reactor.register_async_callback(callback)
+
+		q.join()
+		return q.get()
+
+	def process_gcode(self, gcode):
 		responses = []
-		with self.gcode.mutex:
-			previous_responses = self.gcode_responses
-			self.gcode_responses = []
+
+		with self.process_mutex:
 			try:
-				self.gcode._process_commands(gcode.split('\n'), need_ack=True)
+				previous_responses = self.gcode_responses
+				self.gcode_responses = []
+
+				with self.gcode.get_mutex():
+					self.gcode._process_commands(gcode.split('\n'))
+
 			finally:
 				responses = self.gcode_responses
 				self.gcode_responses = previous_responses
+
 		return responses
 
 	def get_messages(self):
@@ -1112,7 +1134,6 @@ class KlipperWebControl:
 		], cookie_secret=base64.b64encode(uuid.uuid4().bytes + uuid.uuid4().bytes))
 
 		thread = threading.Thread(target=self.spawn, args=(address, port, app))
-		thread.daemon = True
 		thread.start()
 
 	def spawn(self, address, port, app):
