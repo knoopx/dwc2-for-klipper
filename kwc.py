@@ -499,8 +499,10 @@ class Job:
 			self.work_timer = self.reactor.register_timer(self.work_handler, self.reactor.NOW)
 
 	def abort(self):
-		self.did_abort = True
-		self.resume()
+		if self.is_processing():
+			self.did_abort = True
+		else:
+			self.handle_end(True)
 
 	def handle_shutdown(self):
 		self.abort()
@@ -535,10 +537,21 @@ class Job:
 			}
 		}
 
+	def handle_end(self, did_abort=False):
+		self.last_file_name = self.file["fileName"]
+		self.last_file_aborted = did_abort
+		self.last_file_cancelled = did_abort
+		self.reset()
+		if did_abort:
+			template = self.sd_card.manager.abort_gcode
+			if template:
+				self.gcode.run_script(template.render())
+
 	def work_handler(self, eventtime):
-		logging.info("Resuming job at position %d", self.file_position)
+		logging.info("Job started at position %d", self.file_position)
 
 		self.reactor.unregister_timer(self.work_timer)
+
 		try:
 			self.fd.seek(self.file_position)
 		except:
@@ -546,28 +559,23 @@ class Job:
 			self.gcode.respond_error("Unable to seek file")
 			self.work_timer = None
 			return self.reactor.NEVER
+
 		gcode_mutex = self.gcode.get_mutex()
 		partial_input = ""
 		lines = []
 		while not (self.did_pause or self.did_abort):
 			if not lines:
-				# Read more data
 				try:
 					data = self.fd.read(8192)
 				except:
 					logging.exception("job read error")
 					self.gcode.respond_error("Unable to read file")
 					break
-				if not data:
-					# End of file
-					self.last_file_name = self.file["fileName"]
-					self.last_file_aborted = False
-					self.last_file_cancelled = False
-					self.reset()
-					logging.info("job finished")
-					self.gcode.respond("Job finished")
 
+				if not data:
+					self.handle_end()
 					break
+
 				lines = data.split('\n')
 				lines[0] = partial_input + lines[0]
 				partial_input = lines.pop()
@@ -579,6 +587,7 @@ class Job:
 			if gcode_mutex.test():
 				self.reactor.pause(self.reactor.monotonic() + 0.100)
 				continue
+
 			# Dispatch command
 			try:
 				self.gcode.run_script(lines[-1])
@@ -587,20 +596,13 @@ class Job:
 			except:
 				logging.exception("job dispatch error")
 				break
+
 			self.file_position += len(lines.pop()) + 1
 
 		if self.did_abort:
-			logging.info("job aborted at position %d", self.file_position)
-			self.last_file_name = self.file["fileName"]
-			self.last_file_aborted = True
-			self.last_file_cancelled = True
-			self.reset()
+			self.handle_end(True)
 
-			template = self.sd_card.manager.abort_gcode
-			if template:
-				self.gcode.run_script(template.render())
-		else:
-			logging.info("job paused at position %d", self.file_position)
+		logging.info("Job ended at position %d", self.file_position)
 
 		self.work_timer = None
 		return self.reactor.NEVER
