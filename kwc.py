@@ -439,11 +439,10 @@ class WebSocketHandler(tornado.websocket.WebSocketHandler):
 class Job:
 	def __init__(self, sd_card):
 		self.sd_card = sd_card
-		printer = sd_card.manager.printer
-		printer.register_event_handler("klippy:shutdown", self.handle_shutdown)
+		self.printer = sd_card.manager.printer
+		self.printer.register_event_handler("klippy:shutdown", self.handle_shutdown)
 
-		self.toolhead = printer.lookup_object('gcode')
-		self.gcode = printer.lookup_object('gcode')
+		self.gcode = self.printer.lookup_object('gcode')
 
 		self.gcode.register_command('PRINT_FILE', self.cmd_PRINT_FILE)
 		self.gcode.register_command('SELECT_FILE', self.cmd_SELECT_FILE)
@@ -456,7 +455,7 @@ class Job:
 		self.gcode.register_command("RESUME", self.cmd_RESUME)
 		self.gcode.register_command("ABORT", self.cmd_ABORT)
 
-		self.reactor = printer.get_reactor()
+		self.reactor = self.printer.get_reactor()
 
 		self.fd = None
 		self.last_file_name = None
@@ -464,6 +463,13 @@ class Job:
 		self.last_file_cancelled = False
 
 		self.reset()
+
+	def handle_shutdown(self):
+		logging.info("printer shutdown, aborting job")
+		if self.is_processing():
+			self.pause()
+		else:
+			self.handle_end()
 
 	def reset(self):
 		if self.fd is not None:
@@ -500,24 +506,25 @@ class Job:
 			self.did_pause = True
 
 	def resume(self):
-		self.did_pause = False
-		if not self.is_processing():
-			self.work_timer = self.reactor.register_timer(self.work_handler, self.reactor.NOW)
+		if self.did_select_file:
+			self.did_pause = False
+			if not self.is_processing():
+				self.work_timer = self.reactor.register_timer(self.work_handler, self.reactor.NOW)
 
 	def abort(self):
-		if self.is_processing():
-			self.did_abort = True
-		else:
-			self.handle_end(True)
-
-	def handle_shutdown(self):
-		self.abort()
+		if self.did_select_file():
+			if self.is_processing():
+				self.did_abort = True
+			else:
+				self.handle_end(True)
 
 	def get_status(self):
-		if self.is_processing():
-			return 'pausing' if self.did_pause else 'processing'
-		else:
-			return 'paused' if self.did_pause else 'resuming'
+		if self.did_select_file():
+			if self.is_processing():
+				return 'pausing' if self.did_pause else 'processing'
+			else:
+				return 'paused' if self.did_pause else 'resuming'
+		return 'idle'
 
 	def get_state(self, eventtime):
 		file_progress = 0.
@@ -554,14 +561,14 @@ class Job:
 				self.gcode.run_script_from_command(template.render())
 
 	def work_handler(self, eventtime):
-		logging.info("Job started at position %d", self.file_position)
+		logging.info("work handler started at position %d", self.file_position)
 
 		self.reactor.unregister_timer(self.work_timer)
 
 		try:
 			self.fd.seek(self.file_position)
 		except:
-			logging.exception("seek error")
+			logging.exception("work handler seek error")
 			self.gcode.respond_error("Unable to seek file")
 			self.work_timer = None
 			return self.reactor.NEVER
@@ -573,7 +580,7 @@ class Job:
 				try:
 					data = self.fd.read(8192)
 				except:
-					logging.exception("job read error")
+					logging.exception("work handler read error")
 					self.gcode.respond_error("Unable to read file")
 					break
 
@@ -590,7 +597,7 @@ class Job:
 
 			# Pause if any other request is pending in the gcode class
 			if self.gcode.get_mutex().test():
-				logging.info("job paused, waiting for gcode mutex")
+				logging.info("work handler paused, waiting for gcode mutex")
 				self.reactor.pause(self.reactor.monotonic() + 0.100)
 				continue
 
@@ -600,7 +607,7 @@ class Job:
 			except self.gcode.error as e:
 				break
 			except:
-				logging.exception("job dispatch error")
+				logging.exception("work handler dispatch error")
 				break
 
 			self.file_position += len(lines.pop()) + 1
@@ -608,7 +615,7 @@ class Job:
 		if self.did_abort:
 			self.handle_end(True)
 
-		logging.info("Job ended at position %d", self.file_position)
+		logging.info("work handler ended at position %d", self.file_position)
 
 		self.work_timer = None
 		return self.reactor.NEVER
@@ -630,21 +637,23 @@ class Job:
 
 
 	def cmd_PAUSE(self, params):
-		if self.did_pause:
-			self.gcode.respond_info("Print already paused")
-		elif self.did_select_file():
-			self.gcode.run_script_from_command("SAVE_GCODE_STATE STATE=PAUSE_STATE")
-			self.pause()
+		if self.did_select_file():
+			if self.did_pause:
+				self.gcode.respond_info("Print already paused")
+			else:
+				self.gcode.run_script_from_command("SAVE_GCODE_STATE STATE=PAUSE_STATE")
+				self.pause()
 		else:
 			self.gcode.respond_error("No job in progress to be paused")
 
 
 	def cmd_RESUME(self, params):
-		if not self.did_pause:
-			self.gcode.respond_info("Print is not paused, resume ignored")
-		elif self.did_select_file():
-			self.gcode.run_script_from_command("RESTORE_GCODE_STATE STATE=PAUSE_STATE MOVE=1")
-			self.resume()
+		if self.did_select_file():
+			if self.did_pause:
+				self.gcode.run_script_from_command("RESTORE_GCODE_STATE STATE=PAUSE_STATE MOVE=1")
+				self.resume()
+			else:
+				self.gcode.respond_info("Print is not paused, resume ignored")
 		else:
 			self.gcode.respond_error("No job in progress to be resumed")
 
@@ -660,9 +669,10 @@ class Job:
 class SDCard:
 	def __init__(self, manager):
 		self.manager = manager
-		self.job = Job(self)
+		self.printer = self.manager.printer
 		self.root_path = os.path.normpath(os.path.expanduser(manager.config.get('path')))
-		self.gcode = manager.printer.lookup_object('gcode')
+		self.job = Job(self)
+		self.gcode = self.printer.lookup_object('gcode')
 		self.gcode.register_command('RUN_MACRO', self.cmd_RUN_MACRO)
 
 	def resolve_path(self, path):
@@ -705,10 +715,11 @@ class ToolState:
 	def __init__(self, manager):
 		self.manager = manager
 		self.printer = manager.printer
+		self.printer.register_event_handler("klippy:ready", self.handle_ready)
 
-		self.configfile = self.printer.lookup_object('configfile').read_main_config()
-		self.toolhead = self.printer.lookup_object('toolhead')
-		self.kinematics = self.toolhead.get_kinematics()
+		self.extruders = []
+
+	def handle_ready(self):
 		self.extruders = kinematics.extruder.get_printer_extruders(self.printer)
 
 	def get_state(self, eventtime):
@@ -742,14 +753,21 @@ class MoveState:
 	def __init__(self, manager):
 		self.manager = manager
 		self.printer = manager.printer
+		self.printer.register_event_handler("klippy:ready", self.handle_ready)
 
-		self.configfile = self.printer.lookup_object('configfile').read_main_config()
 		self.gcode = self.printer.lookup_object("gcode")
+		self.configfile = self.printer.lookup_object('configfile').read_main_config()
+
+		self.extruders = []
+		self.kinematics = None
+		self.bed_mesh = None
+		self.top_speed = 0
+
+	def handle_ready(self):
 		self.toolhead = self.printer.lookup_object('toolhead')
 		self.kinematics = self.toolhead.get_kinematics()
-		self.extruders = kinematics.extruder.get_printer_extruders(self.printer)
 		self.bed_mesh = self.printer.lookup_object("bed_mesh", None)
-
+		self.extruders = kinematics.extruder.get_printer_extruders(self.printer)
 		self.top_speed = 0
 
 	def get_state(self, eventtime):
@@ -763,18 +781,37 @@ class MoveState:
 
 		steppers = []
 		drives = []
+		axes = []
+		if self.kinematics:
+			for rail in self.kinematics.rails:
+				min_pos, max_pos = rail.get_range()
+				low_limit, high_limit = self.kinematics.limits[self.kinematics.rails.index(rail)]
 
-		for rail in self.kinematics.rails:
-			for stepper in rail.steppers:
-				steppers.append(stepper)
-				drives.append({
-					"position": position[self.kinematics.rails.index(rail)],
-					# "microstepping": { "value": 16, "interpolated": true },
-					# "current": null,
-					# "acceleration": null,
-					# "minSpeed": null,
-					# "maxSpeed": null
+				for stepper in rail.steppers:
+					steppers.append(stepper)
+					drives.append({
+						"position": position[self.kinematics.rails.index(rail)],
+						# "microstepping": { "value": 16, "interpolated": true },
+						# "current": null,
+						# "acceleration": null,
+						# "minSpeed": null,
+						# "maxSpeed": null
+					})
+
+				axes.append({
+					"letter": rail.name,
+					"drives": [steppers.index(stepper) for stepper in rail.steppers],
+					"homed": low_limit <= high_limit,
+					# "machinePosition": null,
+					"min": min_pos,
+					# "minEndstop": null,
+					# "minProbed": false,
+					"max": max_pos,
+					# "maxEndstop": null,
+					# "maxProbed": false,
+					# "visible": true
 				})
+
 
 		extruders = []
 		for extruder in self.extruders:
@@ -791,25 +828,6 @@ class MoveState:
 				"drives": [steppers.index(extruder.stepper)],
 				"factor": self.gcode.extrude_factor,
 				# "nonlinear": { "a": 0, "b": 0, "upperLimit": 0.2, "temperature": 0 }
-			})
-
-		axes = []
-		for rail in self.kinematics.rails:
-			min_pos, max_pos = rail.get_range()
-			low_limit, high_limit = self.kinematics.limits[self.kinematics.rails.index(rail)]
-
-			axes.append({
-				"letter": rail.name,
-				"drives": [steppers.index(stepper) for stepper in rail.steppers],
-				"homed": low_limit <= high_limit,
-				# "machinePosition": null,
-				"min": min_pos,
-				# "minEndstop": null,
-				# "minProbed": false,
-				"max": max_pos,
-				# "maxEndstop": null,
-				# "maxProbed": false,
-				# "visible": true
 			})
 
 		return ({
@@ -829,10 +847,17 @@ class MoveState:
 class HeatState:
 	def __init__(self, manager):
 		self.printer = manager.printer
+		self.printer.register_event_handler("klippy:ready", self.handle_ready)
+
 		self.heat = self.printer.lookup_object('heater')
+		self.heaters = []
+		self.heat_beds = []
+		self.probe_temps = []
+
+	def handle_ready(self):
 		self.heaters = self.heat.heaters.items()
 		self.heat_beds = self.printer.lookup_objects('heater_bed')
-		self.probe_temp = self.printer.lookup_object('probe_temp', None)
+		self.probe_temps = self.printer.lookup_objects('probe_temp')
 
 	def get_state(self, eventtime):
 		heater_statuses = [heater.get_status(eventtime) for name, heater in self.heaters]
@@ -848,17 +873,18 @@ class HeatState:
 			})
 
 		heaters = []
-		for name, heater in self.heat.heaters.items():
-			heater_status = heater_statuses[self.get_heater_index(heater)]
-			heaters.append({
-				"current": heater_status["temperature"],
-				"name": name,
-				"state": self.get_heater_state(heater_status),
-			})
+		if self.heat:
+			for name, heater in self.heaters:
+				heater_status = heater_statuses[self.get_heater_index(heater)]
+				heaters.append({
+					"current": heater_status["temperature"],
+					"name": name,
+					"state": self.get_heater_state(heater_status),
+				})
 
 		extra = []
-		if self.probe_temp:
-			probe_temp, probe_target = self.probe_temp.get_temp(eventtime)
+		for name, probe_temp in self.probe_temps:
+			probe_temp, probe_target = probe_temp.get_temp(eventtime)
 			extra.append({
 				"name": "probe_temp",
 				"current": probe_temp
@@ -882,15 +908,20 @@ class HeatState:
 
 class SensorState:
 	def __init__(self, manager):
-		printer = manager.printer
-		query_endstops = printer.try_load_module(manager.config, 'query_endstops')
+		self.manager = manager
+		self.printer = manager.printer
+		self.printer.register_event_handler("klippy:ready", self.handle_ready)
+		self.probes = []
+
+	def handle_ready(self):
+		query_endstops = self.printer.try_load_module(self.manager.config, 'query_endstops')
 		self.endstops = query_endstops.endstops
-		self.probe = printer.lookup_object('probe', None)
+		self.probes = self.printer.lookup_objects('probe')
 
 	def get_state(self, eventtime):
 		probes = []
 
-		if self.probe:
+		for name, probe in self.probes:
 			probes.append({
 				# "type": null,
 				# "value": null,
@@ -898,7 +929,7 @@ class SensorState:
 				# "threshold": 500,
 				# "speed": 2,
 				# "diveHeight": 5,
-				"offsets": self.probe.get_offsets(),
+				"offsets": probe.get_offsets(),
 				# "triggerHeight": 0.7,
 				# "filtered": true,
 				# "inverted": false,
@@ -925,27 +956,33 @@ class FanState:
 	def __init__(self, manager):
 		self.manager = manager
 		self.printer = self.manager.printer
+		self.printer.register_event_handler("klippy:ready", self.handle_ready)
+		self.fans = []
+		self.heater_fans = []
+
+	def handle_ready(self):
+		self.fans = self.printer.lookup_objects('fan')
+		self.heater_fans = self.printer.lookup_objects('heater_fan')
 
 	def get_state(self, eventtime):
 		fans = []
 
-		# 	rpm = null
-		# 	inverted = false
-		# 	frequency = null
-		# 	min = 0.0
-		# 	max = 1.0
-		# 	blip = 0.1
-		# 	pin = null
-
-		for name, fan in self.printer.lookup_objects('fan'):
+		for name, fan in self.fans:
 			fan_status = fan.get_status(eventtime)
 			fans.append({
 				"name": name,
 				"value": fan_status["speed"],
 				"max": fan.max_power
+				# 	rpm = null
+				# 	inverted = false
+				# 	frequency = null
+				# 	min = 0.0
+				# 	max = 1.0
+				# 	blip = 0.1
+				# 	pin = null
 			})
 
-		for name, fan in self.printer.lookup_objects('heater_fan'):
+		for name, fan in self.heater_fans:
 			fan_status = fan.get_status(eventtime)
 			fans.append({
 				"name": name,
@@ -966,24 +1003,34 @@ class State:
 		self.manager = manager
 		self.printer = manager.printer
 		self.sd_card = manager.sd_card
-		self.gcode = manager.printer.lookup_object("gcode")
-		self.toolhead = manager.printer.lookup_object('toolhead')
+		self.printer.register_event_handler("klippy:ready", self.handle_ready)
+		self.status = 'off'
+
+		self.toolhead = None
+		self.gcode = self.printer.lookup_object("gcode")
+
+	def handle_ready(self):
+		self.status = 'idle'
+		self.toolhead = self.printer.lookup_object('toolhead', None)
+
+	def handle_disconnect(self):
+		self.status = 'off'
 
 	def get_state(self, eventtime):
 		return ({
-			"currentTool": self.manager.tools.get_extruder_index(self.toolhead.extruder),
+			"status": self.get_status(),
+			"currentTool": self.manager.tools.get_extruder_index(self.toolhead.extruder) if self.toolhead else None,
 			# "displayMessage": null, # TODO: used?
 			"logFile": None,  # TODO: figure out how to get it
 			# "mode": "FFF",  # TODO: useful?
-			"status": self.get_status(),
 		})
 
 	def get_status(self):
 		# 'updating';
-		# 'halted';
 		# 'changingTool'
-		status = 'idle'
-		if 'Printer is ready' != self.printer.get_state_message():
+		status = self.status
+
+		if self.printer.is_shutdown:
 			return 'off'
 
 		if self.gcode.is_processing_data:
@@ -1000,8 +1047,6 @@ class Manager:
 		self.config = config
 
 		self.printer = config.get_printer()
-		self.printer.register_event_handler("klippy:ready", self.handle_ready)
-		self.printer.register_event_handler("klippy:disconnect", self.handle_disconnect)
 
 		self.printer_name = config.get('printer_name', "Klipper")
 
@@ -1021,12 +1066,12 @@ class Manager:
 		self.gcode = self.printer.lookup_object('gcode')
 		self.printer.register_event_handler("gcode:response", self.handle_gcode_response)
 
-		self.state = None
-		self.tools = None
-		self.move = None
-		self.heat = None
-		self.fans = None
-		self.sensors = None
+		self.state = State(self)
+		self.tools = ToolState(self)
+		self.move = MoveState(self)
+		self.heat = HeatState(self)
+		self.fans = FanState(self)
+		self.sensors = SensorState(self)
 
 		self.gcode_responses = []
 
@@ -1034,29 +1079,17 @@ class Manager:
 		self.process_mutex = self.reactor.mutex()
 
 		self.broadcast_queue = Queue()
-		self.broadcast_loop = threading.Thread(target=self.broadcast_loop)
-		self.broadcast_loop.start()
+		self.broadcast_thread = threading.Thread(target=self.broadcast_loop)
+		self.broadcast_thread.start()
 
-	def handle_ready(self):
-		logging.info("Starting state notification timer")
-		self.state = State(self)
-		self.tools = ToolState(self)
-		self.move = MoveState(self)
-		self.heat = HeatState(self)
-		self.fans = FanState(self)
-		self.sensors = SensorState(self)
 		self.reactor.update_timer(self.timer, self.reactor.NOW)
-
-	def handle_disconnect(self):
-		logging.info("Stopping state notification timer")
-		self.reactor.unregister_timer(self.timer)
 
 	def handle_timer(self, eventtime):
 		self.broadcast_queue.put_nowait(self.get_state(eventtime))
 		return eventtime + .25
 
 	def broadcast_loop(self):
-		while 1:
+		while True:
 			state = self.broadcast_queue.get(True)
 			if len(WebSocketHandler.clients) > 0:
 				WebSocketHandler.broadcast(state)
@@ -1126,36 +1159,55 @@ class Manager:
 class KlipperWebControl:
 	def __init__(self, config):
 		self.config = config
+		self.printer = self.config.get_printer()
 
-		address = config.get('address', "127.0.0.1")
-		port = config.getint("port", 4444)
-		manager = Manager(self.config)
-
-		app = tornado.web.Application([
+		self.address = self.config.get('address', "127.0.0.1")
+		self.port = self.config.getint("port", 4444)
+		self.manager = Manager(self.config)
+		self.app =	tornado.web.Application([
 			# legacy endpoints just third party integration
-			("/rr_connect", DummyHandler, {"manager": manager}),
-			("/rr_disconnect", DummyHandler, {"manager": manager}),
-			("/rr_upload", RRUploadHandler, {"manager": manager}),
-			("/rr_gcode", RRGCodeHandler, {"manager": manager}),
+			("/rr_connect", DummyHandler, {"manager": self.manager}),
+			("/rr_disconnect", DummyHandler, {"manager": self.manager}),
+			("/rr_upload", RRUploadHandler, {"manager": self.manager}),
+			("/rr_gcode", RRGCodeHandler, {"manager": self.manager}),
 
-			("/machine/bed_mesh/height_map", MachineBedMeshHeightMapHandler, {"manager": manager}),
-			("/machine/file/move", MachineMoveHandler, {"manager": manager}),
-			(r"/machine/file/(.*)", MachineFileHandler, {"manager": manager}),
-			(r"/machine/fileinfo/(.*)", MachineFileInfoHandler, {"manager": manager}),
-			(r"/machine/directory/(.*)", MachineDirectoryHandler, {"manager": manager}),
-			("/machine/code", MachineCodeHandler, {"manager": manager}),
-			("/machine", WebSocketHandler, {"manager": manager}),
-			(r"/.*", WebRootRequestHandler, {"manager": manager}),
+			("/machine/bed_mesh/height_map", MachineBedMeshHeightMapHandler, {"manager": self.manager}),
+			("/machine/file/move", MachineMoveHandler, {"manager": self.manager}),
+			(r"/machine/file/(.*)", MachineFileHandler, {"manager": self.manager}),
+			(r"/machine/fileinfo/(.*)", MachineFileInfoHandler, {"manager": self.manager}),
+			(r"/machine/directory/(.*)", MachineDirectoryHandler, {"manager": self.manager}),
+			("/machine/code", MachineCodeHandler, {"manager": self.manager}),
+			("/machine", WebSocketHandler, {"manager": self.manager}),
+			(r"/.*", WebRootRequestHandler, {"manager": self.manager}),
 		], cookie_secret=base64.b64encode(uuid.uuid4().bytes + uuid.uuid4().bytes))
 
-		thread = threading.Thread(target=self.spawn, args=(address, port, app))
-		thread.start()
+		self.thread = None
+		self.ioloop = None
+		self.http_server = None
 
-	def spawn(self, address, port, app):
-		logging.info("KWC starting at http://%s:%s", address, port)
-		http_server = tornado.httpserver.HTTPServer(app, max_buffer_size=500 * 1024 * 1024)
-		http_server.listen(port)
-		tornado.ioloop.IOLoop.current().start()
+		self.handle_ready()
+		self.printer.register_event_handler("klippy:ready", self.handle_ready)
+		self.printer.register_event_handler("klippy:disconnect", self.handle_disconnect)
+
+	def handle_ready(self):
+		if not self.thread or not self.thread.is_alive:
+			self.thread = threading.Thread(target=self.spawn)
+			self.thread.start()
+
+	def handle_disconnect(self):
+		if self.ioloop:
+			self.ioloop.stop()
+
+		if self.http_server:
+			self.http_server.stop()
+
+	def spawn(self):
+		logging.info("KWC starting at http://%s:%s", self.address, self.port)
+		self.http_server = tornado.httpserver.HTTPServer(self.app, max_buffer_size=500 * 1024 * 1024)
+		self.http_server.listen(self.port)
+		self.ioloop = tornado.ioloop.IOLoop.current()
+		self.ioloop.start()
+		logging.info("KWC stopped.")
 
 
 def load_config(config):
