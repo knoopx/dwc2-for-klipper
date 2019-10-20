@@ -202,6 +202,7 @@ class WebRootRequestHandler(RequestHandler):
 	def initialize(self, manager):
 		self.path = os.path.join(manager.sd_card.root_path, "www")
 
+	@tornado.gen.coroutine
 	def get(self):
 		def get_content_type(path):
 			mime_type, encoding = mimetypes.guess_type(path)
@@ -239,6 +240,7 @@ class RestHandler(RequestHandler):
 	def initialize(self, manager):
 		self.manager = manager
 
+	@tornado.gen.coroutine
 	def options(self, *kwargs):
 		self.set_status(204)
 		self.finish()
@@ -252,6 +254,7 @@ class RestHandler(RequestHandler):
 		self.finish(formatted)
 
 class MachineMoveHandler(RestHandler):
+	@tornado.gen.coroutine
 	def post(self):
 		src = self.manager.sd_card.resolve_path(self.get_argument('from'))
 		dst = self.manager.sd_card.resolve_path(self.get_argument('to'))
@@ -265,6 +268,7 @@ class MachineMoveHandler(RestHandler):
 
 
 class MachineDirectoryHandler(RestHandler):
+	@tornado.gen.coroutine
 	def get(self, path):
 		def file_entry(path):
 			stat = os.stat(path)
@@ -284,6 +288,7 @@ class MachineDirectoryHandler(RestHandler):
 
 		self.finish(json.dumps(files))
 
+	@tornado.gen.coroutine
 	def put(self, path):
 		real_path = self.manager.sd_card.resolve_path(path)
 		if not os.path.exists(real_path):
@@ -291,6 +296,7 @@ class MachineDirectoryHandler(RestHandler):
 
 
 class MachineFileHandler(RestHandler):
+	@tornado.gen.coroutine
 	def put(self, path):
 		real_path = self.manager.sd_card.resolve_path(path)
 		dirname = os.path.dirname(real_path)
@@ -299,6 +305,7 @@ class MachineFileHandler(RestHandler):
 		with open(real_path, 'w') as file:
 			file.write(self.request.body)
 
+	@tornado.gen.coroutine
 	def delete(self, path):
 		real_path = self.manager.sd_card.resolve_path(path)
 		if os.path.isdir(real_path):
@@ -306,6 +313,7 @@ class MachineFileHandler(RestHandler):
 		else:
 			os.remove(real_path)
 
+	@tornado.gen.coroutine
 	def get(self, path):
 		def force_download(buff, filename):
 			self.set_header('Content-Type', 'application/force-download')
@@ -322,13 +330,16 @@ class MachineFileHandler(RestHandler):
 
 
 class MachineBedMeshHeightMapHandler(RestHandler):
+	@tornado.gen.coroutine
 	def get(self):
 		bed_mesh = self.manager.printer.lookup_object("bed_mesh")
 		if bed_mesh and bed_mesh.z_mesh and bed_mesh.z_mesh.mesh_z_table:
-			self.finish(self.get_height_map(bed_mesh))
+			height_map = yield self.get_height_map(bed_mesh)
+			self.finish(height_map)
 		else:
 			raise tornado.web.HTTPError(404, "No height map available")
 
+	@tornado.gen.coroutine
 	def get_height_map(self, bed_mesh):
 		z_mesh = bed_mesh.z_mesh
 
@@ -348,6 +359,7 @@ class MachineBedMeshHeightMapHandler(RestHandler):
 
 
 class MachineFileInfoHandler(RestHandler):
+	@tornado.gen.coroutine
 	def get(self, path):
 		real_path = self.manager.sd_card.resolve_path(path)
 		meta = self.manager.sd_card.parse_gcode_file(real_path)
@@ -355,19 +367,21 @@ class MachineFileInfoHandler(RestHandler):
 
 
 class MachineCodeHandler(RestHandler):
+	@tornado.gen.coroutine
 	def post(self):
 		responses = self.manager.dispatch(self.manager.process_gcode, self.request.body)
 		self.set_header("Content-Type", "text/plain")
 		self.finish("\n".join(responses))
 
 class DummyHandler(RestHandler):
+	@tornado.gen.coroutine
 	def get(self):
 		pass
 
 # Legacy endpoints
 
 class RRGCodeHandler(RestHandler):
-	@tornado.web.asynchronous
+	@tornado.gen.coroutine
 	def get(self):
 		# just replace M32 with PRINT_FILE, this endpoint is mostly used for that
 		gcode = re.sub(r'M32\s+(\"[^"]+\")', r'PRINT_FILE FILE=\1', self.get_argument("gcode"))
@@ -376,6 +390,7 @@ class RRGCodeHandler(RestHandler):
 		self.finish("\n".join(responses))
 
 class RRUploadHandler(RestHandler):
+	@tornado.gen.coroutine
 	def post(self):
 		path = self.get_argument("name")
 		real_path = self.manager.sd_card.resolve_path(path)
