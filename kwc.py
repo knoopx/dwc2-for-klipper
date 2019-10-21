@@ -373,21 +373,21 @@ class MachineCodeHandler(RestHandler):
 		self.set_header("Content-Type", "text/plain")
 		self.finish("\n".join(responses))
 
-class DummyHandler(RestHandler):
+class RRDummyHandler(RestHandler):
 	@tornado.gen.coroutine
 	def get(self):
-		pass
+		self.finish({"err": 0})
 
 # Legacy endpoints
 
 class RRGCodeHandler(RestHandler):
 	@tornado.gen.coroutine
+	# 200 GET /rr_gcode?gcode=M32%20"20mm_cube_0.2mm_PLA_MK3_1h11m.gcode" (127.0.0.1) 12.53ms
 	def get(self):
 		# just replace M32 with PRINT_FILE, this endpoint is mostly used for that
-		gcode = re.sub(r'M32\s+(\"[^"]+\")', r'PRINT_FILE FILE=\1', self.get_argument("gcode"))
-		responses = self.manager.dispatch(self.manager.process_gcode, gcode)
-		self.set_header("Content-Type", "text/plain")
-		self.finish("\n".join(responses))
+		gcode = re.sub(r'M32\s+\"([^"]+)\"', r'PRINT_FILE FILE="0:/gcodes/\1"', self.get_argument("gcode"))
+		self.manager.dispatch(self.manager.process_gcode, gcode)
+		self.finish({"err": 0})
 
 class RRUploadHandler(RestHandler):
 	@tornado.gen.coroutine
@@ -396,6 +396,7 @@ class RRUploadHandler(RestHandler):
 		real_path = self.manager.sd_card.resolve_path(path)
 		with open(real_path, 'w') as file:
 			file.write(self.request.body)
+		self.finish({"err": 0})
 
 class WebSocketHandler(tornado.websocket.WebSocketHandler):
 	clients = set()
@@ -1166,8 +1167,8 @@ class KlipperWebControl:
 		self.manager = Manager(self.config)
 		self.app =	tornado.web.Application([
 			# legacy endpoints just third party integration
-			("/rr_connect", DummyHandler, {"manager": self.manager}),
-			("/rr_disconnect", DummyHandler, {"manager": self.manager}),
+			("/rr_connect", RRDummyHandler, {"manager": self.manager}),
+			("/rr_disconnect", RRDummyHandler, {"manager": self.manager}),
 			("/rr_upload", RRUploadHandler, {"manager": self.manager}),
 			("/rr_gcode", RRGCodeHandler, {"manager": self.manager}),
 
