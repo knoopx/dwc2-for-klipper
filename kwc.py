@@ -30,173 +30,12 @@ def respond(self, msg):
 
 GCodeParser.respond = respond
 
-
-def parse_duration(value):
-	if not value or value == -1: return value
-	h_str = re.search(re.compile(r'(\d+(\s)?hours|\d+(\s)?h)'), value)
-	m_str = re.search(re.compile(r'(([0-9]*\.[0-9]+)\sminutes|\d+(\s)?m)'), value)
-	s_str = re.search(re.compile(r'(\d+(\s)?seconds|\d+(\s)?s)'), value)
-	seconds = 0
-	if h_str:
-		seconds += float(max(re.findall(r'([0-9]*\.?[0-9]+)', ''.join(h_str.group())))) * 3600
-	if m_str:
-		seconds += float(max(re.findall(r'([0-9]*\.?[0-9]+)', ''.join(m_str.group())))) * 60
-	if s_str:
-		seconds += float(max(re.findall(r'([0-9]*\.?[0-9]+)', ''.join(s_str.group()))))
-	if seconds == 0:
-		seconds = float(max(re.findall(r'([0-9]*\.?[0-9]+)', value)))
-	return seconds
-
-
-class DummyGCodeParser:
-	def __init__(self, gcode):
-		self.gcode = gcode
-
-	def match(self, regex, group=0):
-		match = re.search(regex, self.gcode)
-		if match:
-			return match.group(group).strip()
-
-	def match_last(self, regex, group=0):
-		match = None
-		for match in re.finditer(regex, self.gcode):
-			pass
-
-		if match:
-			return match.group(group)
-
-	def name(self):
-		pass
-
-	def height(self):
-		pass
-
-	def first_layer_height(self):
-		pass
-
-	def layer_height(self):
-		pass
-
-	def print_time(self):
-		pass
-
-	def filament(self):
-		return []
-
-	def num_layers(self):
-		pass
-
-class KISSlicerGcodeParser(DummyGCodeParser):
-	def name(self):
-		name = self.match(r'; (KISSlicer .+)', 1)
-		if name:
-			version = self.match(r'version (.+)', 1)
-			return " ".join([name, version]) if version else name
-
-	def height(self):
-		return self.match_last(r'; BEGIN_LAYER_OBJECT z=(\d+.\d+)', 1)
-
-	def layer_height(self):
-		return self.match(r'; layer_thickness_mm = (\d+.\d+)', 1)
-
-	def first_layer_height(self):
-		return self.match(r'first_layer_thickness_mm = (\d+\.\d+)', 1)
-
-	def print_time(self):
-		return parse_duration(self.match(r'Estimated Build Time:\s+(.+)'))
-
-	def filament(self):
-		return self.match(r"Ext 1 =(.*)mm", 1)
-
-class Slic3rGCodeParser(DummyGCodeParser):
-	def name(self):
-		return self.match(r'(Slic3r\s.*) on ', 1)
-
-	def height(self):
-		return self.match_last(r';(\d+(.\d+)?)', 1)
-
-	def first_layer_height(self):
-		return self.match(r'; first_layer_height = (\d+.\d+)', 1)
-
-	def layer_height(self):
-		return self.match(r'; layer_height = (\d+.\d+)', 1)
-
-	def print_time(self):
-		return parse_duration(self.match(r'\d+h?\s?\d+m\s\d+s'))
-
-	def filament(self):
-		return self.match(r'filament used = (\d+.\d+)mm', 1)
-
-	def num_layer(self):
-		return self.height() - self.first_layer_height() / self.layer_height() + 1
-
-
-class CuraGCodeParser(DummyGCodeParser):
-	def name(self):
-		version = self.match(r'Cura_SteamEngine (.+)', 1)
-		if version:
-			return "Ultimaker Cura " + version
-
-	def height(self):
-		return self.match_last(r'\sZ(\d+.\d*)', 1)
-
-	def first_layer_height(self):
-		return self.match(r'\sZ(\d+.\d)\s', 1)
-
-	def layer_height(self):
-		return self.match(r';Layer height: (\d+.\d+)', 1)
-
-	def print_time(self):
-		return parse_duration(self.match(r'TIME:(\d+)'))
-
-	def filament(self):
-		return self.match(r';Filament used: (\d*.\d+)m', 1)
-
-	def num_layer(self):
-		return self.match(r';LAYER_COUNT:(\d)', 1)
-
-class PrusaSlicerGCodeParser(Slic3rGCodeParser):
-	def name(self):
-		return self.match(r'(PrusaSlicer\s.*) on ', 1)
-
-	def filament(self):
-		return self.match(r'filament used \[mm\] = (\d+.\d+)', 1)
-
-def get_gcode_parser(gcode):
-	for cls in [PrusaSlicerGCodeParser, Slic3rGCodeParser, KISSlicerGcodeParser, CuraGCodeParser]:
-		slicer = cls(gcode)
-		if slicer.name():
-			return slicer
-
-	return DummyGCodeParser(gcode)
-
-
-def parse_gcode(gcode):
-	slicer = get_gcode_parser(gcode)
-	print_time = slicer.print_time()
-	height = slicer.height()
-	first_layer_height = slicer.first_layer_height()
-	layer_height = slicer.layer_height()
-	num_layers = slicer.num_layers()
-
-	return {
-		"height": float(height) if height else None,
-		"firstLayerHeight": float(first_layer_height) if first_layer_height else None,
-		"layerHeight": float(layer_height) if layer_height else None,
-		"printTime": int(print_time) if print_time else None,
-		# "filament": slicer.filament(), # TODO: figure out why this needs an array
-		"generatedBy": slicer.name(),
-		"numLayers": int(num_layers) if num_layers else None
-	}
-
-
 class RequestHandler(tornado.web.RequestHandler):
 	def set_default_headers(self):
 		self.set_header("Connection", "close")
 		self.set_header("Access-Control-Allow-Origin", "*")
 		self.set_header("Access-Control-Allow-Methods", "*")
 		self.set_header("Access-Control-Allow-Headers", "*")
-
 
 class WebRootRequestHandler(RequestHandler):
 	def initialize(self, manager):
@@ -362,7 +201,7 @@ class MachineFileInfoHandler(RestHandler):
 	@tornado.gen.coroutine
 	def get(self, path):
 		real_path = self.manager.sd_card.resolve_path(path)
-		meta = self.manager.sd_card.parse_gcode_file(real_path)
+		meta = self.manager.sd_card.get_fileinfo(real_path)
 		self.finish(meta)
 
 
@@ -486,15 +325,17 @@ class Job:
 		if self.is_processing():
 			raise self.gcode.error("SD busy")
 
-	def select_file(self, filename):
+	def select_file(self, filename, start=False):
 		self.ensure_idle()
 		self.reset()
+
 		try:
-			self.file = self.sd_card.parse_gcode_file(filename)
+			self.file = self.sd_card.get_fileinfo(filename)
 			self.fd = open(filename, 'rb')
 			self.file_position = 0
+			if start: self.resume()
 		except:
-			raise self.gcode.error("Failed to open file")
+			raise self.gcode.error("Failed to select file")
 
 	def is_processing(self):
 		return self.work_timer is not None
@@ -622,20 +463,12 @@ class Job:
 		return self.reactor.NEVER
 
 	def cmd_PRINT_FILE(self, params):
-		try:
-			self.select_file(self.sd_card.resolve_path(params["FILE"]))
-			self.resume()
-			self.gcode.respond("Print started: %s Size: %d" % (self.file["fileName"], self.file["size"]))
-		except:
-			raise self.gcode.error("Unable to open file")
+		self.select_file(self.sd_card.resolve_path(params["FILE"]), True)
+		self.gcode.respond("Print started: %s Size: %d" % (self.file["fileName"], self.file["size"]))
 
 	def cmd_SELECT_FILE(self, params):
-		try:
-			self.select_file(self.sd_card.resolve_path(params["FILE"]))
-			self.gcode.respond("File opened: %s Size: %d" % (self.file["fileName"], self.file["size"]))
-		except:
-			raise self.gcode.error("Unable to open file")
-
+		self.select_file(self.sd_card.resolve_path(params["FILE"]))
+		self.gcode.respond("File selected: %s Size: %d" % (self.file["fileName"], self.file["size"]))
 
 	def cmd_PAUSE(self, params):
 		if self.did_select_file():
@@ -684,10 +517,9 @@ class SDCard:
 	def virtual_path(self, path):
 		return "0:/" + os.path.relpath(path, self.root_path)
 
-	def parse_gcode_file(self, path):
-		with open(path, 'rb') as f:
+	def get_fileinfo(self, path):
+		with open(path, 'rb'):
 			return dict(
-				parse_gcode(f.read()),
 				fileName="0:/" + os.path.relpath(path, self.root_path),
 				size=os.stat(path).st_size,
 				lastModified=datetime.utcfromtimestamp(os.stat(path).st_mtime).strftime("%Y-%m-%dT%H:%M:%S"),
