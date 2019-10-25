@@ -1076,9 +1076,6 @@ class Manager:
 
 		self.gcode_responses = []
 
-		# blocks concurrent execution of multiple web gcode invocations
-		self.process_mutex = self.reactor.mutex()
-
 		self.broadcast_queue = Queue()
 		self.broadcast_thread = threading.Thread(target=self.broadcast_loop)
 		self.broadcast_thread.start()
@@ -1116,17 +1113,13 @@ class Manager:
 	def process_gcode(self, gcode):
 		responses = []
 
-		with self.process_mutex:
-			try:
-				previous_responses = self.gcode_responses
-				self.gcode_responses = []
-
-				with self.gcode.get_mutex():
-					self.gcode._process_commands(gcode.split('\n'))
-
-			finally:
-				responses = self.gcode_responses
-				self.gcode_responses = previous_responses
+		try:
+			previous_responses = self.gcode_responses
+			self.gcode_responses = []
+			self.gcode.run_script(gcode)
+		finally:
+			responses = self.gcode_responses
+			self.gcode_responses = previous_responses
 
 		return responses
 
