@@ -604,7 +604,6 @@ class MoveState:
 		self.top_speed = 0
 
 	def get_state(self, eventtime):
-		position = self.gcode.last_position
 		gcode_status = self.gcode.get_status(eventtime)
 
 		requested_speed = gcode_status["speed"] / 60
@@ -623,7 +622,7 @@ class MoveState:
 				for stepper in rail.steppers:
 					steppers.append(stepper)
 					drives.append({
-						"position": position[self.kinematics.rails.index(rail)],
+						"position": stepper.get_commanded_position(),
 						# "microstepping": { "value": 16, "interpolated": true },
 						# "current": null,
 						# "acceleration": null,
@@ -650,7 +649,7 @@ class MoveState:
 		for extruder in self.extruders:
 			steppers.append(extruder.stepper)
 			drives.append({
-				"position": position[steppers.index(extruder.stepper)],
+				"position": extruder.stepper.get_commanded_position(),
 				# "microstepping": { "value": 16, "interpolated": true },
 				# "current": null,
 				# "acceleration": null,
