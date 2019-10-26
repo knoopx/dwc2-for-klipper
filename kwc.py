@@ -2,8 +2,8 @@ import logging
 import threading
 
 import tornado.web
-import tornado.gen
 import tornado.websocket
+import tornado.concurrent
 import base64
 import uuid
 import os
@@ -31,6 +31,11 @@ def respond(self, msg):
 GCodeParser.respond = respond
 
 class RequestHandler(tornado.web.RequestHandler):
+	def initialize(self, manager, executor):
+		self.manager = manager
+		self.executor = executor
+		self.path = os.path.join(manager.sd_card.root_path, "www")
+
 	def set_default_headers(self):
 		self.set_header("Connection", "close")
 		self.set_header("Access-Control-Allow-Origin", "*")
@@ -38,10 +43,7 @@ class RequestHandler(tornado.web.RequestHandler):
 		self.set_header("Access-Control-Allow-Headers", "*")
 
 class WebRootRequestHandler(RequestHandler):
-	def initialize(self, manager):
-		self.path = os.path.join(manager.sd_card.root_path, "www")
-
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def get(self):
 		def get_content_type(path):
 			mime_type, encoding = mimetypes.guess_type(path)
@@ -76,10 +78,7 @@ class RestHandler(RequestHandler):
 		self.set_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
 		self.set_header('Content-Type', 'application/json')
 
-	def initialize(self, manager):
-		self.manager = manager
-
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def options(self, *kwargs):
 		self.set_status(204)
 		self.finish()
@@ -93,7 +92,7 @@ class RestHandler(RequestHandler):
 		self.finish(formatted)
 
 class MachineMoveHandler(RestHandler):
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def post(self):
 		src = self.manager.sd_card.resolve_path(self.get_argument('from'))
 		dst = self.manager.sd_card.resolve_path(self.get_argument('to'))
@@ -107,7 +106,7 @@ class MachineMoveHandler(RestHandler):
 
 
 class MachineDirectoryHandler(RestHandler):
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def get(self, path):
 		def file_entry(path):
 			stat = os.stat(path)
@@ -127,7 +126,7 @@ class MachineDirectoryHandler(RestHandler):
 
 		self.finish(json.dumps(files))
 
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def put(self, path):
 		real_path = self.manager.sd_card.resolve_path(path)
 		if not os.path.exists(real_path):
@@ -135,7 +134,7 @@ class MachineDirectoryHandler(RestHandler):
 
 
 class MachineFileHandler(RestHandler):
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def put(self, path):
 		real_path = self.manager.sd_card.resolve_path(path)
 		dirname = os.path.dirname(real_path)
@@ -144,7 +143,7 @@ class MachineFileHandler(RestHandler):
 		with open(real_path, 'w') as file:
 			file.write(self.request.body)
 
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def delete(self, path):
 		real_path = self.manager.sd_card.resolve_path(path)
 		if os.path.isdir(real_path):
@@ -152,7 +151,7 @@ class MachineFileHandler(RestHandler):
 		else:
 			os.remove(real_path)
 
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def get(self, path):
 		def force_download(buff, filename):
 			self.set_header('Content-Type', 'application/force-download')
@@ -169,16 +168,15 @@ class MachineFileHandler(RestHandler):
 
 
 class MachineBedMeshHeightMapHandler(RestHandler):
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def get(self):
 		bed_mesh = self.manager.printer.lookup_object("bed_mesh")
 		if bed_mesh and bed_mesh.z_mesh and bed_mesh.z_mesh.mesh_z_table:
-			height_map = yield self.get_height_map(bed_mesh)
+			height_map = self.get_height_map(bed_mesh)
 			self.finish(height_map)
 		else:
 			raise tornado.web.HTTPError(404, "No height map available")
 
-	@tornado.gen.coroutine
 	def get_height_map(self, bed_mesh):
 		z_mesh = bed_mesh.z_mesh
 
@@ -198,7 +196,7 @@ class MachineBedMeshHeightMapHandler(RestHandler):
 
 
 class MachineFileInfoHandler(RestHandler):
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def get(self, path):
 		real_path = self.manager.sd_card.resolve_path(path)
 		meta = self.manager.sd_card.get_fileinfo(real_path)
@@ -206,21 +204,21 @@ class MachineFileInfoHandler(RestHandler):
 
 
 class MachineCodeHandler(RestHandler):
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def post(self):
 		responses = self.manager.dispatch(self.manager.process_gcode, self.request.body)
 		self.set_header("Content-Type", "text/plain")
 		self.finish("\n".join(responses))
 
 class RRDummyHandler(RestHandler):
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def get(self):
 		self.finish({"err": 0})
 
 # Legacy endpoints
 
 class RRGCodeHandler(RestHandler):
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	# 200 GET /rr_gcode?gcode=M32%20"20mm_cube_0.2mm_PLA_MK3_1h11m.gcode" (127.0.0.1) 12.53ms
 	def get(self):
 		# just replace M32 with PRINT_FILE, this endpoint is mostly used for that
@@ -229,7 +227,7 @@ class RRGCodeHandler(RestHandler):
 		self.finish({"err": 0})
 
 class RRUploadHandler(RestHandler):
-	@tornado.gen.coroutine
+	@tornado.concurrent.run_on_executor
 	def post(self):
 		path = self.get_argument("name")
 		real_path = self.manager.sd_card.resolve_path(path)
@@ -989,21 +987,22 @@ class KlipperWebControl:
 		self.address = self.config.get('address', "127.0.0.1")
 		self.port = self.config.getint("port", 4444)
 		self.manager = Manager(self.config)
+		self.executor = tornado.concurrent.futures.ThreadPoolExecutor(max_workers=8)
 		self.app =	tornado.web.Application([
 			# legacy endpoints just third party integration
-			("/rr_connect", RRDummyHandler, {"manager": self.manager}),
-			("/rr_disconnect", RRDummyHandler, {"manager": self.manager}),
-			("/rr_upload", RRUploadHandler, {"manager": self.manager}),
-			("/rr_gcode", RRGCodeHandler, {"manager": self.manager}),
+			("/rr_connect", RRDummyHandler, {"manager": self.manager, "executor": self.executor}),
+			("/rr_disconnect", RRDummyHandler, {"manager": self.manager, "executor": self.executor}),
+			("/rr_upload", RRUploadHandler, {"manager": self.manager, "executor": self.executor}),
+			("/rr_gcode", RRGCodeHandler, {"manager": self.manager, "executor": self.executor}),
 
-			("/machine/bed_mesh/height_map", MachineBedMeshHeightMapHandler, {"manager": self.manager}),
-			("/machine/file/move", MachineMoveHandler, {"manager": self.manager}),
-			(r"/machine/file/(.*)", MachineFileHandler, {"manager": self.manager}),
-			(r"/machine/fileinfo/(.*)", MachineFileInfoHandler, {"manager": self.manager}),
-			(r"/machine/directory/(.*)", MachineDirectoryHandler, {"manager": self.manager}),
-			("/machine/code", MachineCodeHandler, {"manager": self.manager}),
+			("/machine/bed_mesh/height_map", MachineBedMeshHeightMapHandler, {"manager": self.manager, "executor": self.executor}),
+			("/machine/file/move", MachineMoveHandler, {"manager": self.manager, "executor": self.executor}),
+			(r"/machine/file/(.*)", MachineFileHandler, {"manager": self.manager, "executor": self.executor}),
+			(r"/machine/fileinfo/(.*)", MachineFileInfoHandler, {"manager": self.manager, "executor": self.executor}),
+			(r"/machine/directory/(.*)", MachineDirectoryHandler, {"manager": self.manager, "executor": self.executor}),
+			("/machine/code", MachineCodeHandler, {"manager": self.manager, "executor": self.executor}),
 			("/machine", WebSocketHandler, {"manager": self.manager}),
-			(r"/.*", WebRootRequestHandler, {"manager": self.manager}),
+			(r"/.*", WebRootRequestHandler, {"manager": self.manager, "executor": self.executor}),
 		], cookie_secret=base64.b64encode(uuid.uuid4().bytes + uuid.uuid4().bytes))
 
 		self.thread = None
