@@ -18,7 +18,7 @@ from extras.gcode_macro import TemplateWrapper
 import json
 import io, traceback
 from gcode import GCodeParser
-from multiprocessing import Queue, JoinableQueue
+from multiprocessing import Queue
 
 # monkey-patch GCodeParser to emit respond events (so we can capture)
 
@@ -927,16 +927,14 @@ class Manager:
 
 	# used to run commands within the reactor from different threads
 	def dispatch(self, target, *args):
-		q = JoinableQueue()
+		q = Queue()
 
 		def callback(e):
-			q.put(target(*args))
-			q.task_done()
+			q.put_nowait(target(*args))
 
 		reactor = self.printer.get_reactor()
 		reactor.register_async_callback(callback)
 
-		q.join()
 		return q.get()
 
 	def process_gcode(self, gcode):
@@ -946,6 +944,8 @@ class Manager:
 			previous_responses = self.gcode_responses
 			self.gcode_responses = []
 			self.gcode.run_script(gcode)
+		except:
+			logging.exception("process_gcode")
 		finally:
 			responses = self.gcode_responses
 			self.gcode_responses = previous_responses
