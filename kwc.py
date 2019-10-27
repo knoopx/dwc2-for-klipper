@@ -736,52 +736,6 @@ class HeatState:
 		return state
 
 
-class SensorState:
-	def __init__(self, manager):
-		self.manager = manager
-		self.printer = manager.printer
-		self.printer.register_event_handler("klippy:ready", self.handle_ready)
-		self.probes = []
-
-	def handle_ready(self):
-		query_endstops = self.printer.try_load_module(self.manager.config, 'query_endstops')
-		self.endstops = query_endstops.endstops
-		self.probes = self.printer.lookup_objects('probe')
-
-	def get_state(self, eventtime):
-		probes = []
-
-		for name, probe in self.probes:
-			probes.append({
-				# "type": null,
-				# "value": null,
-				# "secondaryValues": [],
-				# "threshold": 500,
-				# "speed": 2,
-				# "diveHeight": 5,
-				"offsets": probe.get_offsets(),
-				# "triggerHeight": 0.7,
-				# "filtered": true,
-				# "inverted": false,
-				# "recoveryTime": 0,
-				# "travelSpeed": 100,
-				# "maxProbeCount": 1,
-				# "tolerance": 0.03,
-				# "disablesBed": false,
-				# "persistent": false
-			})
-
-		endstops = []
-		# last_move_time = self.toolhead.get_last_move_time() # TODO: raises random exceptions like DripModeEndSignal
-		# for endstop, name in self.endstops:
-		# 	endstops.append({"name": name, "triggered": endstop.query_endstop(last_move_time)})
-
-		return ({
-			"endstops": endstops,
-			"probes": probes
-		})
-
-
 class FanState:
 	def __init__(self, manager):
 		self.manager = manager
@@ -901,7 +855,6 @@ class Manager:
 		self.move = MoveState(self)
 		self.heat = HeatState(self)
 		self.fans = FanState(self)
-		self.sensors = SensorState(self)
 
 		self.gcode_responses = []
 
@@ -966,7 +919,6 @@ class Manager:
 			"heat": self.heat.get_state(eventtime),
 			"move": self.move.get_state(eventtime),
 			"job": self.sd_card.job.get_state(eventtime),
-			"sensors": self.sensors.get_state(eventtime),
 			"network": {
 				"name": self.printer_name,
 				# "hostname": "klipper",
