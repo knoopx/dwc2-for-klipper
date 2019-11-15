@@ -9,6 +9,7 @@ import uuid
 import os
 from datetime import datetime
 import re
+import time
 import copy
 import shutil
 import mimetypes
@@ -845,7 +846,6 @@ class Manager:
 		self.sd_card = SDCard(self)
 
 		self.reactor = self.printer.get_reactor()
-		self.timer = self.reactor.register_timer(self.handle_timer)
 
 		self.gcode = self.printer.lookup_object('gcode')
 		self.printer.register_event_handler("gcode:response", self.handle_gcode_response)
@@ -862,17 +862,11 @@ class Manager:
 		self.broadcast_thread = threading.Thread(target=self.broadcast_loop)
 		self.broadcast_thread.start()
 
-		self.reactor.update_timer(self.timer, self.reactor.NOW)
-
-	def handle_timer(self, eventtime):
-		self.broadcast_queue.put_nowait(self.get_state(eventtime))
-		return eventtime + .25
-
 	def broadcast_loop(self):
 		while True:
-			state = self.broadcast_queue.get(True)
 			if len(WebSocketHandler.clients) > 0:
-				WebSocketHandler.broadcast(state)
+				WebSocketHandler.broadcast(self.dispatch(self.get_state, self.reactor.monotonic()))
+			time.sleep(.25)
 
 	def handle_gcode_response(self, msg):
 		if re.match('(B|T\d):\d+.\d\s/\d+.\d+', msg): return
