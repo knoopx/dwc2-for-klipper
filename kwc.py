@@ -13,7 +13,6 @@ import time
 import copy
 import shutil
 import mimetypes
-import kinematics.extruder
 import jinja2
 from extras.gcode_macro import TemplateWrapper
 import json
@@ -30,6 +29,18 @@ def respond(self, msg):
 	self.printer.send_event("gcode:response", msg)
 
 GCodeParser.respond = respond
+
+def get_printer_extruders(printer):	
+    out = []	
+    for i in range(99):	
+        section = 'extruder'	
+        if i:	
+            section = 'extruder%d' % (i,)	
+        extruder = printer.lookup_object(section, None)	
+        if extruder is None:	
+            break	
+        out.append(extruder)	
+    return out
 
 class RequestHandler(tornado.web.RequestHandler):
 	def initialize(self, manager, executor):
@@ -552,7 +563,7 @@ class ToolState:
 		self.extruders = []
 
 	def handle_ready(self):
-		self.extruders = kinematics.extruder.get_printer_extruders(self.printer)
+		self.extruders = get_printer_extruders(self.printer)
 
 	def get_state(self, eventtime):
 		tools = []
@@ -599,7 +610,7 @@ class MoveState:
 		self.toolhead = self.printer.lookup_object('toolhead')
 		self.kinematics = self.toolhead.get_kinematics()
 		self.bed_mesh = self.printer.lookup_object("bed_mesh", None)
-		self.extruders = kinematics.extruder.get_printer_extruders(self.printer)
+		self.extruders = get_printer_extruders(self.printer)
 		self.top_speed = 0
 
 	def get_state(self, eventtime):
@@ -630,7 +641,7 @@ class MoveState:
 					})
 
 				axes.append({
-					"letter": rail.name,
+					"letter": rail.steppers[0].get_name(short=True),
 					"drives": [steppers.index(stepper) for stepper in rail.steppers],
 					"homed": low_limit <= high_limit,
 					# "machinePosition": null,
