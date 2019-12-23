@@ -26,7 +26,7 @@ path: ~/sdcard
 port: 4444
 abort_gcode:
   G91; relative
-  {% if printer.extruder0.temperature >= 170 %}
+  {% if printer.extruder.temperature >= 170 %}
   G1 E-1 F300; retract the filament a bit before lifting the nozzle
   {% endif %}
   G0 Z15; move z axis up 15
