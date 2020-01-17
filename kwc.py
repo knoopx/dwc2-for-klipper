@@ -706,7 +706,7 @@ class HeatState:
 
 		beds = []
 		for name, heat_bed in self.heat_beds:
-			bed_heater_index = self.get_heater_index(heat_bed)
+			bed_heater_index = self.get_heater_index(heat_bed.heater)
 			heater_bed_status = heater_statuses[bed_heater_index]
 			beds.append({
 				"active": [heater_bed_status['target']],
