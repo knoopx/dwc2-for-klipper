@@ -183,9 +183,8 @@ class MachineBedMeshHeightMapHandler(RestHandler):
 	@tornado.concurrent.run_on_executor
 	def get(self):
 		bed_mesh = self.manager.printer.lookup_object("bed_mesh")
-		if bed_mesh and bed_mesh.z_mesh and bed_mesh.z_mesh.mesh_z_table:
-			height_map = self.get_height_map(bed_mesh)
-			self.finish(height_map)
+		if bed_mesh and bed_mesh.z_mesh and bed_mesh.z_mesh.mesh_matrix:
+			self.finish(self.get_height_map(bed_mesh))
 		else:
 			raise tornado.web.HTTPError(404, "No height map available")
 
@@ -194,13 +193,12 @@ class MachineBedMeshHeightMapHandler(RestHandler):
 
 		mesh = []
 		for y in range(z_mesh.mesh_y_count - 1, -1, -1):
-			for x, z in enumerate(z_mesh.mesh_z_table[y]):
+			for x, z in enumerate(z_mesh.mesh_matrix[y]):
 				mesh.append(
 					[z_mesh.mesh_x_min + x * z_mesh.mesh_x_dist, z_mesh.mesh_y_min + (y - 1) * z_mesh.mesh_y_dist, (z)])
 
-
 		probed = []
-		for y, line in enumerate(bed_mesh.calibrate.probed_z_table):
+		for y, line in enumerate(bed_mesh.bmc.probed_matrix):
 			for x, z in enumerate(line):
 				probed.append([z_mesh.mesh_x_min + x * z_mesh.mesh_x_dist, z_mesh.mesh_y_min + (y - 1) * z_mesh.mesh_y_dist, z ])
 
