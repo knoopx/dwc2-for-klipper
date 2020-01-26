@@ -401,9 +401,12 @@ class Job:
 		}
 
 	def handle_end(self, did_abort=False):
-		self.last_file_name = self.file["fileName"]
+		if self.file:
+			self.last_file_name = self.file["fileName"]
+
 		self.last_file_aborted = did_abort
 		self.last_file_cancelled = did_abort
+			
 		self.reset()
 		if did_abort:
 			template = self.sd_card.manager.abort_gcode
