@@ -22,13 +22,13 @@ from multiprocessing import Queue
 
 # monkey-patch GCodeParser to emit respond events (so we can capture)
 
-original_respond = GCodeParser.respond
+original_respond = GCodeParser.respond_raw
 
-def respond(self, msg):
+def respond_raw(self, msg):
 	original_respond(self, msg)
 	self.printer.send_event("gcode:response", msg)
 
-GCodeParser.respond = respond
+GCodeParser.respond_raw = respond_raw
 
 def get_printer_extruders(printer):	
     out = []	
@@ -474,12 +474,12 @@ class Job:
 		return self.reactor.NEVER
 
 	def cmd_PRINT_FILE(self, params):
-		self.select_file(self.sd_card.resolve_path(params["FILE"]), True)
-		self.gcode.respond("Print started: %s Size: %d" % (self.file["fileName"], self.file["size"]))
+		self.select_file(self.sd_card.resolve_path(params.get("FILE")), True)
+		self.gcode.respond_info("Print started: %s Size: %d" % (self.file["fileName"], self.file["size"]))
 
 	def cmd_SELECT_FILE(self, params):
-		self.select_file(self.sd_card.resolve_path(params["FILE"]))
-		self.gcode.respond("File selected: %s Size: %d" % (self.file["fileName"], self.file["size"]))
+		self.select_file(self.sd_card.resolve_path(params.get("FILE")))
+		self.gcode.respond_info("File selected: %s Size: %d" % (self.file["fileName"], self.file["size"]))
 
 	def cmd_PAUSE(self, params):
 		if self.did_select_file():
@@ -537,7 +537,7 @@ class SDCard:
 			)
 
 	def cmd_RUN_MACRO(self, params):
-		real_path = self.resolve_path(params["FILE"])
+		real_path = self.resolve_path(params.get("FILE"))
 		try:
 			with open(real_path, "rb") as f:
 				content = f.read()
@@ -546,7 +546,7 @@ class SDCard:
 
 		try:
 			env = jinja2.Environment('{%', '%}', '{', '}')
-			template = TemplateWrapper(self.manager.printer, env, params["FILE"], content)
+			template = TemplateWrapper(self.manager.printer, env, params.get("FILE"), content)
 			macro = template.render()
 		except Exception as e:
 			raise self.gcode.error(str(e))
@@ -692,7 +692,7 @@ class HeatState:
 		self.printer = manager.printer
 		self.printer.register_event_handler("klippy:ready", self.handle_ready)
 
-		self.heat = self.printer.lookup_object('heater')
+		self.heat = self.printer.lookup_object('heaters')
 		self.heaters = []
 		self.heat_beds = []
 		self.probe_temps = []
@@ -827,7 +827,7 @@ class State:
 		# 'changingTool'
 		status = self.status
 
-		if self.printer.is_shutdown:
+		if self.printer.is_shutdown():
 			return 'off'
 
 		if self.gcode.is_processing_data:
@@ -847,13 +847,13 @@ class Manager:
 
 		self.printer_name = config.get('printer_name', "Klipper")
 
-		self.gcode_macro = self.printer.try_load_module(config, 'gcode_macro')
+		self.gcode_macro = self.printer.load_object(config, 'gcode_macro')
 
 		if config.get('abort_gcode', None) is not None:
 			self.abort_gcode = self.gcode_macro.load_template(config, 'abort_gcode')
 
 		# filament_switch_sensor depends on pause_resume, we load it first and re-attach to our own implementation
-		self.printer.try_load_module(config, 'pause_resume')
+		self.printer.load_object(config, 'pause_resume')
 
 		self.sd_card = SDCard(self)
 
