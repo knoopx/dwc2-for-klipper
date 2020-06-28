@@ -216,7 +216,7 @@ class MachineFileInfoHandler(RestHandler):
 class MachineCodeHandler(RestHandler):
 	@tornado.concurrent.run_on_executor
 	def post(self):
-		responses = self.manager.dispatch(self.manager.process_gcode, self.request.body)
+		responses = self.manager.invoke_on_reactor(self.manager.process_gcode, self.request.body)
 		self.set_header("Content-Type", "text/plain")
 		self.finish("\n".join(responses))
 
@@ -233,7 +233,7 @@ class RRGCodeHandler(RestHandler):
 	def get(self):
 		# just replace M32 with PRINT_FILE, this endpoint is mostly used for that
 		gcode = re.sub(r'M32\s+\"([^"]+)\"', r'PRINT_FILE FILE="0:/gcodes/\1"', self.get_argument("gcode"))
-		self.manager.dispatch(self.manager.process_gcode, gcode)
+		self.manager.invoke_on_reactor(self.manager.process_gcode, gcode)
 		self.finish({"err": 0})
 
 class RRUploadHandler(RestHandler):
@@ -870,7 +870,6 @@ class Manager:
 
 		self.gcode_responses = []
 
-		self.broadcast_queue = Queue()
 		self.broadcast_thread = threading.Thread(target=self.broadcast_loop)
 		self.broadcast_thread.start()
 
@@ -885,16 +884,15 @@ class Manager:
 		self.gcode_responses.append(msg)
 
 	# used to run commands within the reactor from different threads
-	def dispatch(self, target, *args):
-		q = Queue()
-
+	def invoke_on_reactor(self, target, *args):
+		event = threading.Event()
+		ret = {'value': None}
 		def callback(e):
-			q.put_nowait(target(*args))
-
-		reactor = self.printer.get_reactor()
-		reactor.register_async_callback(callback)
-
-		return q.get()
+			ret['value'] = target(*args)
+			event.set()
+		self.reactor.register_async_callback(callback)
+		event.wait()
+		return ret['value']
 
 	def process_gcode(self, gcode):
 		responses = []
@@ -919,12 +917,12 @@ class Manager:
 	def get_state(self, eventtime):
 		return ({
 			"messages": self.get_messages(),
-			"state": self.dispatch(self.state.get_state, eventtime),
-			"tools": self.dispatch(self.tools.get_state, eventtime),
-			"fans": self.dispatch(self.fans.get_state, eventtime),
-			"heat": self.dispatch(self.heat.get_state, eventtime),
-			"move": self.dispatch(self.move.get_state, eventtime),
-			"job": self.dispatch(self.sd_card.job.get_state, eventtime),
+			"state": self.invoke_on_reactor(self.state.get_state, eventtime),
+			"tools": self.invoke_on_reactor(self.tools.get_state, eventtime),
+			"fans": self.invoke_on_reactor(self.fans.get_state, eventtime),
+			"heat": self.invoke_on_reactor(self.heat.get_state, eventtime),
+			"move": self.invoke_on_reactor(self.move.get_state, eventtime),
+			"job": self.invoke_on_reactor(self.sd_card.job.get_state, eventtime),
 			"network": {
 				"name": self.printer_name,
 				# "hostname": "klipper",
