@@ -877,7 +877,7 @@ class Manager:
 	def broadcast_loop(self):
 		while True:
 			if len(WebSocketHandler.clients) > 0:
-				WebSocketHandler.broadcast(self.dispatch(self.get_state, self.reactor.monotonic()))
+				WebSocketHandler.broadcast(self.get_state(self.reactor.monotonic()))
 			time.sleep(.25)
 
 	def handle_gcode_response(self, msg):
@@ -919,12 +919,12 @@ class Manager:
 	def get_state(self, eventtime):
 		return ({
 			"messages": self.get_messages(),
-			"state": self.state.get_state(eventtime),
-			"tools": self.tools.get_state(eventtime),
-			"fans": self.fans.get_state(eventtime),
-			"heat": self.heat.get_state(eventtime),
-			"move": self.move.get_state(eventtime),
-			"job": self.sd_card.job.get_state(eventtime),
+			"state": self.dispatch(self.state.get_state, eventtime),
+			"tools": self.dispatch(self.tools.get_state, eventtime),
+			"fans": self.dispatch(self.fans.get_state, eventtime),
+			"heat": self.dispatch(self.heat.get_state, eventtime),
+			"move": self.dispatch(self.move.get_state, eventtime),
+			"job": self.dispatch(self.sd_card.job.get_state, eventtime),
 			"network": {
 				"name": self.printer_name,
 				# "hostname": "klipper",
