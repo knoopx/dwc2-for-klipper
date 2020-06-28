@@ -889,7 +889,7 @@ class Manager:
 		q = Queue()
 
 		def callback(e):
-			q.put_nowait(target(*args))
+			q.put(target(*args))
 
 		reactor = self.printer.get_reactor()
 		reactor.register_async_callback(callback)
